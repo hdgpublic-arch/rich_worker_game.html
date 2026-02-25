@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>打工人逆袭 · 开心版炸弹</title>
+<style>
+body{margin:0;background:#0f172a;display:flex;justify-content:center;align-items:center;height:100vh;font-family:-apple-system,BlinkMacSystemFont,sans-serif;}
+#phone{width:390px;height:844px;background:#1e293b;border-radius:40px;overflow:hidden;box-shadow:0 0 80px rgba(0,0,0,0.8);position:relative;}
+canvas{display:block;background:#0ea5e9;}
+#score{position:absolute;top:30px;width:100%;text-align:center;font-size:24px;color:white;font-weight:bold;text-shadow:0 0 5px #000;}
+#subtitle{position:absolute;bottom:60px;width:100%;text-align:center;font-size:18px;color:white;}
+#startScreen{position:absolute;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);display:flex;justify-content:center;align-items:center;flex-direction:column;color:white;font-size:24px;font-weight:bold;cursor:pointer;}
+#gameOver{position:absolute;top:40%;width:100%;text-align:center;color:white;display:none;}
+button{margin-top:15px;padding:10px 22px;border:none;border-radius:25px;background:#22c55e;color:white;font-size:16px;}
+#leaderboard{margin-top:15px;font-size:14px;}
+</style>
+</head>
+<body>
+<div id="phone">
+<div id="score">Score: 0</div>
+<div id="subtitle"></div>
+<div id="startScreen">点击即玩</div>
+<div id="gameOver">
+<div>炸弹炸到你了 😭</div>
+<button onclick="restart()">再打一份工</button>
+<div id="leaderboard"></div>
+</div>
+<canvas id="game" width="390" height="844"></canvas>
+</div>
+
+<script>
+const canvas = document.getElementById("game");
+const ctx = canvas.getContext("2d");
+
+let player = {x:165,y:720,size:80};
+let items = [];
+let particles = [];
+let bubbles = [];
+let score = 0;
+let speed = 2.5;
+let bombChance = 0.08;
+let gameOver = false;
+let gameStarted = false;
+let doubleMode = false;
+let phase = 1;
+let tick = 0;
+
+// ---------- 音频 ----------
+let bgm, coinAudio, bombAudio;
+
+function initAudio(){
+    bgm = new Audio("https://www.soundhelix.com/examples/mp3/SoundHelix-Song-8.mp3"); 
+    bgm.loop = true; bgm.volume = 0.3; bgm.play();
+    coinAudio = new Audio("https://freesound.org/data/previews/341/341695_3248244-lq.mp3");
+    bombAudio = new Audio("https://freesound.org/data/previews/256/256113_3263906-lq.mp3");
+}
+
+// ---------- 气泡 ----------
+function spawnBubble(){bubbles.push({x:Math.random()*390,y:844,size:Math.random()*6+3,speed:Math.random()*1+0.5});}
+setInterval(spawnBubble,200); // 更密集气泡
+function drawBubbles(){
+    bubbles.forEach((b,i)=>{
+        b.y-=b.speed;
+        ctx.beginPath(); ctx.arc(b.x,b.y,b.size,0,6.28);
+        ctx.strokeStyle="rgba(255,255,255,0.5)"; ctx.stroke();
+        if(b.y<0)bubbles.splice(i,1);
+    });
+}
+
+// ---------- 掉落物 ----------
+function spawn(){
+    if(gameOver||!gameStarted) return;
+    let r = Math.random();
+    let type;
+    if(r < bombChance) type="bomb";
+    else if(r<0.25) type="smallCoin";
+    else if(r<0.45) type="bigCoin";
+    else if(r<0.7) type="smallBill";
+    else type="bigBill";
+
+    let size = 20; 
+    if(type==="bomb"){
+        let sizes = [20,30,40]; 
+        size = sizes[Math.floor(Math.random()*sizes.length)];
+    }
+
+    items.push({x:Math.random()*(390-40),y:-20,type:type,dash:Math.random()<0.2, angle: Math.random()*360, size:size});
+}
+setInterval(spawn,450); // 增加掉落频率
+
+// ---------- 阶段字幕 ----------
+function showSubtitle(text){
+    document.getElementById("subtitle").innerText=text;
+    setTimeout(()=>{document.getElementById("subtitle").innerText="";},3000);
+}
+
+// ---------- 角色 ----------
+function drawPlayer(){
+    ctx.fillStyle="#fde047";
+    ctx.roundRect(player.x,player.y,player.size,player.size,20);
+    ctx.fill();
+    ctx.fillStyle="white";
+    ctx.beginPath();
+    ctx.arc(player.x+25,player.y+30,12,0,6.28);
+    ctx.arc(player.x+55,player.y+30,12,0,6.28);
+    ctx.fill();
+    ctx.fillStyle="black";
+    ctx.beginPath();
+    ctx.arc(player.x+25,player.y+30,6,0,6.28);
+    ctx.arc(player.x+55,player.y+30,6,0,6.28);
+    ctx.fill();
+}
+
+// ---------- 炸弹闪烁 ----------
+function drawBomb(x,y,size,angle){
+    ctx.save();
+    ctx.translate(x,y); ctx.rotate(angle*Math.PI/180);
+    let alpha = 0.6 + 0.4*Math.sin(tick/10);
+    ctx.fillStyle = `rgba(239,68,68,${alpha})`;
+    ctx.beginPath(); ctx.arc(0,0,size,0,6.28); ctx.fill();
+    ctx.strokeStyle="yellow"; ctx.lineWidth=3;
+    ctx.beginPath(); ctx.moveTo(-size*0.6,0);ctx.lineTo(size*0.6,0);
+    ctx.moveTo(0,-size*0.6);ctx.lineTo(0,size*0.6); ctx.stroke();
+    ctx.restore();
+}
+
+// ---------- 钱 ----------
+function drawMoney(i){
+    ctx.save(); 
+    ctx.translate(i.x,i.y); 
+    ctx.rotate((i.angle+=2)*Math.PI/180); // 保留旋转
+
+    switch(i.type){
+        case "smallCoin":
+            ctx.fillStyle = "#facc15";
+            ctx.beginPath(); ctx.arc(0,0,15,0,6.28); // 调大
+            ctx.fill();
+            // 加 € 符号
+            ctx.fillStyle = "white";
+            ctx.font = "bold 12px sans-serif";
+            ctx.textAlign = "center";
+            ctx.textBaseline = "middle";
+            ctx.fillText("€", 0, 0);
+            break;
+        case "bigCoin":
+            ctx.fillStyle = "#eab308";
+            ctx.beginPath(); ctx.arc(0,0,20,0,6.28);
+            ctx.fill();
+            // 加 € 符号
+            ctx.fillStyle = "white";
+            ctx.font = "bold 16px sans-serif";
+            ctx.textAlign = "center";
+            ctx.textBaseline = "middle";
+            ctx.fillText("€", 0, 0);
+            break;
+        case "smallBill":
+            ctx.fillStyle = "#22c55e";
+            ctx.fillRect(-12.5,-7.5,25,15);
+            ctx.fillStyle = "white";
+            ctx.font = "bold 12px sans-serif";
+            ctx.textAlign = "center";
+            ctx.textBaseline = "middle";
+            ctx.fillText("€", 0, 0);
+            break;
+        case "bigBill":
+            ctx.fillStyle = "#16a34a";
+            ctx.fillRect(-17.5,-10,35,20);
+            ctx.fillStyle = "white";
+            ctx.font = "bold 16px sans-serif";
+            ctx.textAlign = "center";
+            ctx.textBaseline = "middle";
+            ctx.fillText("€", 0, 0);
+            break;
+    }
+
+    ctx.restore();
+}
+// ---------- 爆炸粒子 ----------
+function spawnExplosion(x,y){
+    for(let i=0;i<20;i++){
+        particles.push({x,y,dx:(Math.random()-0.5)*4,dy:(Math.random()-0.5)*4,r:Math.random()*5+2,life:30});
+    }
+}
+function drawParticles(){
+    for(let i=particles.length-1;i>=0;i--){
+        let p = particles[i];
+        ctx.fillStyle="orange"; ctx.beginPath();ctx.arc(p.x,p.y,p.r,0,6.28);ctx.fill();
+        p.x+=p.dx;p.y+=p.dy;p.life--;
+        if(p.life<=0) particles.splice(i,1);
+    }
+}
+
+// ---------- 更新 ----------
+function update(){
+    if(!gameStarted||gameOver) return;
+    tick++;
+    ctx.clearRect(0,0,390,844);
+    drawBubbles(); drawPlayer(); drawParticles();
+
+    items.forEach((i,index)=>{
+        let itemSpeed=(i.type==="bomb"&&i.dash)?speed*3:speed;
+        i.y+=itemSpeed;
+        if(i.type==="bomb") drawBomb(i.x,i.y,i.size,i.angle); else drawMoney(i);
+
+        // 炸弹碰撞判定
+        if(i.type==="bomb" &&
+           player.x < i.x+i.size &&
+           player.x+player.size > i.x &&
+           player.y < i.y+i.size &&
+           player.y+player.size > i.y){
+            bombAudio.play();
+            spawnExplosion(player.x+player.size/2,player.y+player.size/2);
+            endGame();
+            items.splice(index,1);
+        }
+
+        // 收钱
+        if(i.type!=="bomb" &&
+           player.x < i.x+20 &&
+           player.x+player.size > i.x-20 &&
+           player.y < i.y+20 &&
+           player.y+player.size > i.y-20){
+            coinAudio.play();
+            let add=0;
+            switch(i.type){case "smallCoin":add=1;break;case "bigCoin":add=2;break;case "smallBill":add=5;break;case "bigBill":add=10;break;}
+            if(doubleMode) add*=2;
+            score+=add;
+            items.splice(index,1);
+        }
+
+        if(i.y>844) items.splice(index,1);
+    });
+
+// ---------- 阶段触发 ----------
+    if(phase===1 && score>=100){
+        phase=2;
+        showSubtitle("觉醒！工资翻倍！");
+        speed+=1;
+    }
+
+    // ---------- 新增：300分工资翻倍冲刺 ----------
+    if(phase===2 && score>=300){
+        phase=3;
+        showSubtitle("年底冲刺奖金翻倍！");
+        doubleMode=true; // 暴富模式
+        speed += 1.5; // 适度加速
+
+        // 5秒后取消暴富模式
+        setTimeout(()=>{
+            doubleMode=false;
+            showSubtitle("冲刺结束，恢复正常工资");
+        },5000);
+    }
+
+    if(phase===3 && score>=500){
+        phase=4;
+        showSubtitle("你成为老板了！🎉");
+        endGame();
+    }
+
+    document.getElementById("score").innerText=(doubleMode?"暴富 ×2 ":"")+"Score: "+score;
+
+    requestAnimationFrame(update);
+}
+
+// ---------- 控制 ----------
+document.addEventListener("keydown",(e)=>{
+    if(e.key==="ArrowLeft") player.x-=25;
+    if(e.key==="ArrowRight") player.x+=25;
+    if(player.x<0) player.x=0;
+    if(player.x>canvas.width-player.size) player.x=canvas.width-player.size;
+});
+canvas.addEventListener("mousemove",(e)=>{
+    const rect = canvas.getBoundingClientRect();
+    player.x = e.clientX - rect.left - player.size/2;
+    if(player.x<0) player.x=0;
+    if(player.x>canvas.width-player.size) player.x=canvas.width-player.size;
+});
+canvas.addEventListener("touchmove",(e)=>{
+    e.preventDefault();
+    const rect = canvas.getBoundingClientRect();
+    player.x = e.touches[0].clientX - rect.left - player.size/2;
+    if(player.x<0) player.x=0;
+    if(player.x>canvas.width-player.size) player.x=canvas.width-player.size;
+},{passive:false});
+
+// ---------- 难度递增 ----------
+setInterval(()=>{if(!gameOver&&gameStarted){speed+=0.5;bombChance+=0.05;}},3000);
+
+// ---------- 排行榜 ----------
+function saveScore(){let list=JSON.parse(localStorage.getItem("rank")||"[]");list.push(score);list.sort((a,b)=>b-a);list=list.slice(0,5);localStorage.setItem("rank",JSON.stringify(list));}
+function showLeaderboard(){let list=JSON.parse(localStorage.getItem("rank")||"[]");let html="<br>🏆 排行榜<br>";list.forEach((s,i)=>html+=(i+1)+". "+s+"<br>");document.getElementById("leaderboard").innerHTML=html;}
+
+// ---------- 游戏结束 ----------
+function endGame(){gameOver=true;saveScore();showLeaderboard();document.getElementById("gameOver").style.display="block";}
+
+// ---------- 重开 ----------
+function restart(){
+    score=0; items=[]; speed=2.5; bombChance=0.08; gameOver=false; doubleMode=false; phase=1;
+    tick=0;
+    document.getElementById("gameOver").style.display="none";
+    document.getElementById("startScreen").style.display="flex";
+}
+
+// ---------- 点击开始 ----------
+document.getElementById("startScreen").addEventListener("click",()=>{
+    initAudio();
+    gameStarted=true;
+    update();
+    document.getElementById("startScreen").style.display="none";
+    showSubtitle("开始打工吧！");
+});
+</script>
+</body>
+</html>
+
